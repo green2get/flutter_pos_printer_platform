@@ -20,7 +20,6 @@ class USBPrinterService private constructor(private var mHandler: Handler?) {
 
     private var mContext: Context? = null
     private var mUSBManager: UsbManager? = null
-
     private var mPermissionIndent: PendingIntent? = null
 
     private var mUsbDevice: UsbDevice? = null
@@ -53,6 +52,7 @@ class USBPrinterService private constructor(private var mHandler: Handler?) {
                         )
 
                         if (granted && usbDevice != null) {
+                            closeConnectionIfExists(resetStateOnly = true)
                             mUsbDevice = usbDevice
                             state = STATE_USB_CONNECTED
                             mHandler?.obtainMessage(STATE_USB_CONNECTED)?.sendToTarget()
@@ -62,6 +62,7 @@ class USBPrinterService private constructor(private var mHandler: Handler?) {
                                 mContext?.getString(R.string.user_refuse_perm) + ": ${usbDevice?.deviceName}",
                                 Toast.LENGTH_LONG
                             ).show()
+                            closeConnectionIfExists()
                             state = STATE_USB_NONE
                             mHandler?.obtainMessage(STATE_USB_NONE)?.sendToTarget()
                         }
@@ -69,16 +70,38 @@ class USBPrinterService private constructor(private var mHandler: Handler?) {
                 }
 
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
-                    if (mUsbDevice != null) {
-                        Toast.makeText(context, mContext?.getString(R.string.device_off), Toast.LENGTH_LONG).show()
-                        closeConnectionIfExists()
-                        state = STATE_USB_NONE
-                        mHandler?.obtainMessage(STATE_USB_NONE)?.sendToTarget()
-                    }
+                    val detached: UsbDevice? =
+                        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+
+                    Log.w(
+                        LOG_TAG,
+                        "USB_DEVICE_DETACHED deviceId=${detached?.deviceId} vid=${detached?.vendorId} pid=${detached?.productId}"
+                    )
+
+                    Toast.makeText(
+                        context,
+                        mContext?.getString(R.string.device_off),
+                        Toast.LENGTH_LONG
+                    ).show()
+
+                    closeConnectionIfExists()
+                    state = STATE_USB_NONE
+                    mHandler?.obtainMessage(STATE_USB_NONE)?.sendToTarget()
                 }
 
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
-                    Log.d(LOG_TAG, "USB_DEVICE_ATTACHED")
+                    val attached: UsbDevice? =
+                        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+
+                    Log.d(
+                        LOG_TAG,
+                        "USB_DEVICE_ATTACHED deviceId=${attached?.deviceId} vid=${attached?.vendorId} pid=${attached?.productId}"
+                    )
+
+
+                    closeConnectionIfExists(resetStateOnly = true)
+                    state = STATE_USB_NONE
+                    mHandler?.obtainMessage(STATE_USB_NONE)?.sendToTarget()
                 }
             }
         }
@@ -92,10 +115,9 @@ class USBPrinterService private constructor(private var mHandler: Handler?) {
             mUsbDeviceReceiver = UsbPermissionReceiver()
         }
 
-        // ✅ Android 14+ ต้อง explicit Intent + FLAG_IMMUTABLE
         val intent = Intent(mContext, mUsbDeviceReceiver!!.javaClass).apply {
             action = ACTION_USB_PERMISSION
-            setPackage(mContext!!.packageName) // กัน implicit เพิ่มความชัวร์
+            setPackage(mContext!!.packageName)
         }
 
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -120,20 +142,32 @@ class USBPrinterService private constructor(private var mHandler: Handler?) {
         mUsbDeviceReceiver = null
     }
 
-    fun closeConnectionIfExists() {
-        if (mUsbDeviceConnection != null) {
-            try {
-                mUsbDeviceConnection!!.releaseInterface(mUsbInterface)
-            } catch (_: Exception) {
+    /**
+     * close connection + reset handles
+     * @param resetStateOnly
+     */
+    fun closeConnectionIfExists(resetStateOnly: Boolean = false) {
+        try {
+            mUsbDeviceConnection?.let { conn ->
+                try {
+                    mUsbInterface?.let { intf ->
+                        conn.releaseInterface(intf)
+                    }
+                } catch (_: Exception) {
+                }
+                try {
+                    conn.close()
+                } catch (_: Exception) {
+                }
             }
-            try {
-                mUsbDeviceConnection!!.close()
-            } catch (_: Exception) {
-            }
+        } finally {
             mUsbInterface = null
             mEndPoint = null
-            mUsbDevice = null
             mUsbDeviceConnection = null
+
+            if (!resetStateOnly) {
+                mUsbDevice = null
+            }
         }
     }
 
@@ -247,7 +281,6 @@ class USBPrinterService private constructor(private var mHandler: Handler?) {
         Log.v(LOG_TAG, "Printing text")
         val isConnected = openConnection()
         return if (isConnected) {
-            Log.v(LOG_TAG, "Connected to device")
             Thread {
                 synchronized(printLock) {
                     val bytes: ByteArray = text.toByteArray(Charset.forName("UTF-8"))
@@ -266,7 +299,6 @@ class USBPrinterService private constructor(private var mHandler: Handler?) {
         Log.v(LOG_TAG, "Printing raw data")
         val isConnected = openConnection()
         return if (isConnected) {
-            Log.v(LOG_TAG, "Connected to device")
             Thread {
                 synchronized(printLock) {
                     val bytes: ByteArray = Base64.decode(data, Base64.DEFAULT)
@@ -289,12 +321,14 @@ class USBPrinterService private constructor(private var mHandler: Handler?) {
             return false
         }
 
-        if (mEndPoint == null || mUsbDeviceConnection == null) {
+        val ep = mEndPoint
+        val conn = mUsbDeviceConnection
+        if (ep == null || conn == null) {
             Log.e(LOG_TAG, "Endpoint/Connection is null after openConnection()")
             return false
         }
 
-        val chunkSize = mEndPoint!!.maxPacketSize
+        val chunkSize = ep.maxPacketSize
         Log.v(LOG_TAG, "Max Packet Size: $chunkSize")
         Log.v(LOG_TAG, "Connected to device")
 
@@ -309,13 +343,20 @@ class USBPrinterService private constructor(private var mHandler: Handler?) {
                     while (offset < byteData.size) {
                         val end = min(offset + chunkSize, byteData.size)
                         val buffer = Arrays.copyOfRange(byteData, offset, end)
-                        b = mUsbDeviceConnection!!.bulkTransfer(mEndPoint, buffer, buffer.size, 100000)
+                        b = conn.bulkTransfer(ep, buffer, buffer.size, 100000)
                         offset = end
                     }
                 } else {
-                    b = mUsbDeviceConnection!!.bulkTransfer(mEndPoint, byteData, byteData.size, 100000)
+                    b = conn.bulkTransfer(ep, byteData, byteData.size, 100000)
                 }
                 Log.i(LOG_TAG, "Return code: $b")
+
+                if (b == -1) {
+                    Log.w(LOG_TAG, "bulkTransfer returned -1, reset USB connection")
+                    closeConnectionIfExists()
+                    state = STATE_USB_NONE
+                    mHandler?.obtainMessage(STATE_USB_NONE)?.sendToTarget()
+                }
             }
         }.start()
 
@@ -327,11 +368,9 @@ class USBPrinterService private constructor(private var mHandler: Handler?) {
         private var mInstance: USBPrinterService? = null
 
         private const val LOG_TAG = "ESC POS Printer"
-
         private const val ACTION_USB_PERMISSION =
             "com.sersoluciones.flutter_pos_printer_platform.USB_PERMISSION"
 
-        // Constants that indicate the current connection state
         const val STATE_USB_NONE = 0
         const val STATE_USB_CONNECTING = 2
         const val STATE_USB_CONNECTED = 3
