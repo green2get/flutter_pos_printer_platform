@@ -345,7 +345,7 @@ class FlutterPosPrinterPlatformPlugin : FlutterPlugin, ActivityAware {
             bluetoothService!!.setActivity(getActivityPluginBinding()!!.activity)
         }
 
-        initializeBluetoothAndUsbPrinters()
+
     }
 
     /////
