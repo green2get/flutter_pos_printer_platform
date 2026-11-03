@@ -272,6 +272,11 @@ class BluetoothBleConnection(
             uuid = gattService.uuid.toString()
             Log.d(TAG, " ------- service -> uuid: $uuid")
             if (gattService.uuid == UUID.fromString("000018f0-0000-1000-8000-00805f9b34fb")) {
+                // Status replies from the printer come back on its notify characteristic
+                gattService.characteristics
+                    .firstOrNull { it.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0 }
+                    ?.let { enableNotifications(it) }
+
                 // Loops through available Characteristics.
                 gattService.characteristics.forEach { gattCharacteristic ->
 
@@ -295,13 +300,18 @@ class BluetoothBleConnection(
 
     }
 
+    private fun enableNotifications(characteristic: BluetoothGattCharacteristic) {
+        val gatt = bluetoothGatt ?: return
+        gatt.setCharacteristicNotification(characteristic, true)
+        val descriptor = characteristic.getDescriptor(CLIENT_CONFIG_DESCRIPTOR) ?: return
+        descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+        gatt.writeDescriptor(descriptor)
+    }
+
     fun getSupportedGattServices(): List<BluetoothGattService>? {
         return bluetoothGatt?.services
     }
 
-
-    // Read from the InputStream
-    private var buffer = ArrayList<Byte>()
 
     private fun broadcastUpdate(characteristic: BluetoothGattCharacteristic?) {
 
@@ -311,49 +321,29 @@ class BluetoothBleConnection(
 
                 }
                 else -> {
-                    // For all other profiles, writes the data formatted in HEX.
+                    // Forward as-is: ESC/POS status replies are raw bytes, not CR-terminated lines
                     val data: ByteArray? = characteristic.value
                     if (data?.isNotEmpty() == true) {
-
-                        // 30 33 20 30 30 20 30 30 20 30 30 20 30 30 20 30 30 20 44 38 20 38 32 20 0D 0A
-                        // 48 51 32 48 48 32 48 48 32 48 48 32 48 48 32 48 48 32 68 56 32 56 50 32 13 10
-                        for (byte in data) {
-
-                            buffer.add(byte)
-//                            buffer += byte
-                            if (byte.toInt() == 13) {
-                                sendMsg()
-                                break
-                            }
-                        }
-
+                        // Send the obtained bytes to the UI Activity
+                        mHandler.obtainMessage(
+                            BluetoothConstants.MESSAGE_READ,
+                            data.size,
+                            -1,
+                            data.copyOf()
+                        ).sendToTarget()
                     }
                 }
             }
         }
     }
 
-    private fun sendMsg() {
-        val hexString: String = buffer.joinToString(separator = " ") {
-            String.format("%02X", it)
-        }
-//        Log.d(TAG, "sendMsg data $hexString value size ${hexString.length}")
-        // Send the obtained bytes to the UI Activity
-        mHandler.obtainMessage(
-            BluetoothConstants.MESSAGE_READ,
-            buffer.size,
-            -1,
-            buffer.toByteArray()
-        ).sendToTarget()
-
-        buffer = arrayListOf()
-
-    }
-
     companion object {
 
         val UUID_HEART_RATE_MEASUREMENT: UUID =
             UUID.fromString(HEART_RATE_MEASUREMENT)
+
+        val CLIENT_CONFIG_DESCRIPTOR: UUID =
+            UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
     }
 }

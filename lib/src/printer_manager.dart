@@ -70,6 +70,18 @@ class PrinterManager {
     }
   }
 
+  /// Bytes sent back by the printer, e.g. replies to ESC/POS status requests.
+  /// Subscribe before sending the request so the reply is not missed.
+  Stream<List<int>> dataReceived({required PrinterType type}) {
+    if (type == PrinterType.bluetooth && (Platform.isIOS || Platform.isAndroid)) {
+      return bluetoothPrinterConnector.dataReceived;
+    } else if (type == PrinterType.usb && (Platform.isAndroid || Platform.isWindows)) {
+      return usbPrinterConnector.dataReceived;
+    } else {
+      return tcpPrinterConnector.dataReceived;
+    }
+  }
+
   Future<bool> printLogo({required PrinterType type}) async {
     if (type == PrinterType.bluetooth && Platform.isAndroid) {
       return await bluetoothPrinterConnector.printLogo();

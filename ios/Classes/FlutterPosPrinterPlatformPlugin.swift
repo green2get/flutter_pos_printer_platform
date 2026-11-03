@@ -257,6 +257,11 @@ public class FlutterPosPrinterPlatformPlugin: NSObject, FlutterPlugin, FlutterSt
             if let charac = service.characteristics {
                 for characteristic in charac {
                     
+                    // Status replies from the printer come back on its notify characteristic
+                    if characteristic.properties.contains(.notify) {
+                        peripheral.setNotifyValue(true, for: characteristic)
+                    }
+                    
                     if characteristic.uuid.uuidString == "2AF1" {
                         //                        print("characteristic: " + characteristic.description )
                         self.printerCharacteristic = characteristic
@@ -266,6 +271,11 @@ public class FlutterPosPrinterPlatformPlugin: NSObject, FlutterPlugin, FlutterSt
             }
             
         }
+    }
+    
+    public func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+        guard error == nil, let data = characteristic.value, !data.isEmpty else { return }
+        channel.invokeMethod("ReadData", arguments: FlutterStandardTypedData(bytes: data))
     }
     
     func decodePeripheralState(peripheralState: CBPeripheralState) {

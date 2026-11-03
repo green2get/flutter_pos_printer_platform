@@ -103,6 +103,7 @@ class FlutterPosPrinterPlaformPluginHandlers internal constructor(private val pl
             call.method.equals("printText") -> plugin.onMethodCallPrintText(call, result)
             call.method.equals("printRawData") -> plugin.onMethodCallPrintRawData(call, result)
             call.method.equals("printBytes") -> plugin.onMethodCallPrintBytes(call, result)
+            call.method.equals("readBytes") -> plugin.onMethodCallReadBytes(call, result)
             call.method.equals("printImage") -> plugin.onMethodCallPrintImage(call, result)
             call.method.equals("printLogo") -> plugin.onMethodCallPrintLogo(call, result)
             else -> {
@@ -188,9 +189,9 @@ class FlutterPosPrinterPlatformPlugin : FlutterPlugin, ActivityAware {
                 }
                 BluetoothConstants.MESSAGE_READ -> {
                     val readBuf = msg.obj as ByteArray
-                    var readMessage = String(readBuf, 0, msg.arg1)
-                    readMessage = readMessage.trim { it <= ' ' }
-                    Log.d("bluetooth", "receive bt: $readMessage")
+                    val bytes = readBuf.copyOf(msg.arg1)
+                    Log.d("bluetooth", "receive bt: ${bytes.size} bytes")
+                    channel?.invokeMethod("ReadData", bytes)
                 }
                 BluetoothConstants.MESSAGE_DEVICE_NAME -> {
                     val deviceName = msg.data.getString(BluetoothConstants.DEVICE_NAME)
@@ -472,8 +473,19 @@ class FlutterPosPrinterPlatformPlugin : FlutterPlugin, ActivityAware {
     private fun printBytes(bytes: ArrayList<Int>?, result: Result) {
         if (bytes == null) return
         adapter?.setHandler(usbHandler)
-        adapter?.printBytes(bytes)
-        result.success(true)
+        result.success(adapter?.printBytes(bytes) ?: false)
+    }
+
+    private fun readBytes(timeout: Int, result: Result) {
+        val adpt = adapter
+        if (adpt == null) {
+            result.success(null)
+            return
+        }
+        adpt.setHandler(usbHandler)
+        adpt.readBytes(timeout) { bytes ->
+            Handler(Looper.getMainLooper()).post { result.success(bytes) }
+        }
     }
 
     private fun printBitmap(bitmap: Bitmap, orientation: Int, result: Result) {
@@ -614,6 +626,11 @@ class FlutterPosPrinterPlatformPlugin : FlutterPlugin, ActivityAware {
     internal fun onMethodCallPrintBytes(@NonNull call: MethodCall, @NonNull result: Result){
         val bytes: ArrayList<Int>? = call.argument("bytes")
         printBytes(bytes, result)
+    }
+
+    internal fun onMethodCallReadBytes(@NonNull call: MethodCall, @NonNull result: Result){
+        val timeout: Int = call.argument("timeout") ?: 200
+        readBytes(timeout, result)
     }
 
     internal fun onMethodCallPrintImage(@NonNull call: MethodCall, @NonNull result: Result){

@@ -309,14 +309,19 @@ class BluetoothConnection constructor(handler: Handler) : IBluetoothConnection {
 
                 // Read from the InputStream.
                 numBytes = try {
-                    mmInStream?.read(mmBuffer) ?: 0
+                    mmInStream?.read(mmBuffer) ?: -1
                 } catch (e: IOException) {
 //                    Log.d(TAG, "Input stream was disconnected", e)
                     connectionLost()
                     break
                 }
-                // Send the obtained bytes to the UI Activity
-                val readMsg = mHandler.obtainMessage(BluetoothConstants.MESSAGE_READ, numBytes, -1, mmBuffer)
+                if (numBytes < 0) {
+                    connectionLost()
+                    break
+                }
+                // Send the obtained bytes to the UI Activity; copy them since mmBuffer
+                // is reused by the next read before the handler runs
+                val readMsg = mHandler.obtainMessage(BluetoothConstants.MESSAGE_READ, numBytes, -1, mmBuffer.copyOf(numBytes))
                 readMsg.sendToTarget()
 
             }

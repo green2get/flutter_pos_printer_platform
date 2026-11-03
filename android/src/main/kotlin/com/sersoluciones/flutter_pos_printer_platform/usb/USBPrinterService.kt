@@ -23,6 +23,7 @@ class USBPrinterService private constructor(private var mHandler: Handler?) {
     private var mUsbDeviceConnection: UsbDeviceConnection? = null
     private var mUsbInterface: UsbInterface? = null
     private var mEndPoint: UsbEndpoint? = null
+    private var mEndPointIn: UsbEndpoint? = null
     var state: Int = STATE_USB_NONE
 
     fun setHandler(handler: Handler?) {
@@ -87,6 +88,7 @@ class USBPrinterService private constructor(private var mHandler: Handler?) {
             mUsbDeviceConnection!!.close()
             mUsbInterface = null
             mEndPoint = null
+            mEndPointIn = null
             mUsbDevice = null
             mUsbDeviceConnection = null
         }
@@ -152,6 +154,10 @@ class USBPrinterService private constructor(private var mHandler: Handler?) {
                     Toast.makeText(mContext, mContext?.getString(R.string.connected_device), Toast.LENGTH_SHORT).show()
                     return if (usbDeviceConnection.claimInterface(usbInterface, true)) {
                         mEndPoint = ep
+                        // Optional: printers that report status answer on a bulk-in endpoint
+                        mEndPointIn = (0 until usbInterface.endpointCount)
+                            .map { usbInterface.getEndpoint(it) }
+                            .firstOrNull { it.type == UsbConstants.USB_ENDPOINT_XFER_BULK && it.direction == UsbConstants.USB_DIR_IN }
                         mUsbInterface = usbInterface
                         mUsbDeviceConnection = usbDeviceConnection
                         true
@@ -164,6 +170,29 @@ class USBPrinterService private constructor(private var mHandler: Handler?) {
             }
         }
         return true
+    }
+
+    /**
+     * Reads what the printer sent back (e.g. ESC/POS status replies) on a background thread.
+     * [callback] gets the bytes read (empty on timeout), or null when there is no open
+     * connection or the printer has no bulk-in endpoint.
+     */
+    fun readBytes(timeoutMs: Int, callback: (ByteArray?) -> Unit) {
+        if (!openConnection()) {
+            callback(null)
+            return
+        }
+        val connection = mUsbDeviceConnection
+        val endPointIn = mEndPointIn
+        if (connection == null || endPointIn == null) {
+            callback(null)
+            return
+        }
+        Thread {
+            val buffer = ByteArray(endPointIn.maxPacketSize)
+            val b: Int = connection.bulkTransfer(endPointIn, buffer, buffer.size, timeoutMs)
+            callback(if (b > 0) buffer.copyOf(b) else ByteArray(0))
+        }.start()
     }
 
     fun printText(text: String): Boolean {

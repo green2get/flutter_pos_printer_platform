@@ -77,6 +77,10 @@ class BluetoothPrinterConnector implements PrinterConnector<BluetoothPrinterInpu
   Stream<BTStatus> get _statusStream => _statusStreamController.stream;
   final StreamController<BTStatus> _statusStreamController = StreamController.broadcast();
 
+  /// Bytes sent back by the printer, e.g. replies to ESC/POS status requests
+  Stream<List<int>> get dataReceived =>
+      _methodStream.where((m) => m.method == "ReadData").map((m) => List<int>.from(m.arguments as List));
+
   BluetoothPrinterConnector({required this.address, required this.isBle, this.name}) {
     flutterPrinterChannel.setMethodCallHandler((MethodCall call) {
       _methodStreamController.add(call);

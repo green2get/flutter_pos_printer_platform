@@ -40,6 +40,10 @@ class TcpPrinterConnector implements PrinterConnector<TcpPrinterInput> {
   Stream<TCPStatus> get _statusStream => _statusStreamController.stream;
   final StreamController<TCPStatus> _statusStreamController = StreamController.broadcast();
 
+  /// Bytes sent back by the printer, e.g. replies to ESC/POS status requests
+  Stream<List<int>> get dataReceived => _dataStreamController.stream;
+  final StreamController<List<int>> _dataStreamController = StreamController.broadcast();
+
   static Future<List<PrinterDiscovered<TcpPrinterInfo>>> discoverPrinters({String? ipAddress, int? port, Duration? timeOut}) async {
     final List<PrinterDiscovered<TcpPrinterInfo>> result = [];
     final defaultPort = port ?? 9100;
@@ -97,6 +101,7 @@ class TcpPrinterConnector implements PrinterConnector<TcpPrinterInput> {
 
   @override
   Future<bool> send(List<int> bytes) async {
+    if (_socket == null) return false;
     try {
       // final _socket = await Socket.connect(_host, _port, timeout: _timeout);
       _socket?.add(Uint8List.fromList(bytes));
@@ -157,7 +162,10 @@ class TcpPrinterConnector implements PrinterConnector<TcpPrinterInput> {
   Future<bool> disconnect({int? delayMs}) async {
     // await _socket?.flush();
     _socket?.destroy();
-    // status = TCPStatus.none;
+    // Reset right away so the next connectAndKeep opens a new socket
+    // instead of reusing the destroyed one
+    _socket = null;
+    status = TCPStatus.none;
     // _statusStreamController.add(status);
     if (delayMs != null) {
       await Future.delayed(Duration(milliseconds: delayMs), () => null);
@@ -171,21 +179,29 @@ class TcpPrinterConnector implements PrinterConnector<TcpPrinterInput> {
   }
 
   void listenSocket() {
-    _socket?.listen(
-      (dynamic message) {
-        debugPrint('message $message');
+    final socket = _socket;
+    socket?.listen(
+      (Uint8List message) {
+        _dataStreamController.add(message);
       },
       onDone: () {
-        status = TCPStatus.none;
         debugPrint('socket closed'); //if closed you will get it here
-        _socket?.destroy();
+        socket.destroy();
+        // A late close of an old socket must not reset a newer connection
+        if (identical(_socket, socket)) {
+          _socket = null;
+          status = TCPStatus.none;
+        }
         // ping.stop();
         // _statusStreamController.add(status);
       },
       onError: (error) {
-        status = TCPStatus.none;
         debugPrint('socket error $error');
-        _socket?.destroy();
+        socket.destroy();
+        if (identical(_socket, socket)) {
+          _socket = null;
+          status = TCPStatus.none;
+        }
         // ping.stop();
         // _statusStreamController.add(status);
       },

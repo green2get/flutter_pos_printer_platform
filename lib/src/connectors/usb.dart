@@ -67,6 +67,35 @@ class UsbPrinterConnector implements PrinterConnector<UsbPrinterInput> {
   Stream<USBStatus> get _statusStream => _statusStreamController.stream;
   final StreamController<USBStatus> _statusStreamController = StreamController.broadcast();
 
+  /// Bytes sent back by the printer, e.g. replies to ESC/POS status requests.
+  /// The bulk-in endpoint is only polled while this stream has listeners.
+  Stream<List<int>> get dataReceived => _dataStreamController.stream;
+  late final StreamController<List<int>> _dataStreamController = StreamController.broadcast(
+    onListen: _startReading,
+    onCancel: () => _readGeneration++,
+  );
+  int _readGeneration = 0;
+
+  Future<void> _startReading() async {
+    if (!Platform.isAndroid) return;
+    final generation = ++_readGeneration;
+    while (generation == _readGeneration) {
+      Uint8List? data;
+      try {
+        data = await flutterPrinterChannel.invokeMethod<Uint8List>('readBytes', {"timeout": 200});
+      } catch (e) {
+        return;
+      }
+      // null: no open connection or the printer has no bulk-in endpoint
+      if (data == null) return;
+      if (data.isNotEmpty) {
+        _dataStreamController.add(data);
+      } else {
+        await Future.delayed(Duration(milliseconds: 50));
+      }
+    }
+  }
+
   UsbPrinterConnector.Android({required this.vendorId, required this.productId}) : name = '';
   UsbPrinterConnector.Windows({required this.name})
       : vendorId = '',
